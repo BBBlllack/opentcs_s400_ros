@@ -28,9 +28,15 @@ RSA_PUB = ""
 # SIM_ENV = False if os.getenv("SIM_ENV") else True
 SIM_ENV = False
 DIR_VEL = [0,1] # 表示对准y方向 [-1,0]对准x负方向
+ENABLE_LOG = True  # 设置为 False 可关闭日志输出
 
 if not ENC_ENABLE:
     ENCR_METHOD = "NON"
+
+def log(msg):
+    if ENABLE_LOG:
+        print(msg)
+
 
 def print_config():
     print("=== 系统配置信息 ===")
@@ -125,6 +131,7 @@ class SendEntity:
     def read_value(value: str):
         global first_point
         e = SendEntity()
+        # log("value: " + value)
         for k, v in json.loads(value).items():
             setattr(e, k, v)
         if e.instruction and e.instruction.get("step", None):
@@ -159,7 +166,10 @@ def sendMsg(sock: socket.socket, m: ReceiveEntity, E=True):
     sock.sendall(m.encode(CODE))
 
 
-def recvMsg(sock: socket.socket):
+def recvMsg1(sock: socket.socket):
+    '''
+    存在沾包问题,遂废弃
+    '''
     tname = threading.current_thread().name
     while True:
         data = sock.recv(BUF_SIZE)
@@ -173,7 +183,7 @@ def recvMsg(sock: socket.socket):
         elif ENCR_METHOD == "SM4":
             # print(f"{tname} recv: {data}")
             data = SM4_decrypt(data)
-        print(f"s{tname} : {data}")
+        # print(f"s{tname} : {data}")
         data = SendEntity.read_value(data)
         # 经过坐标变换的相对坐标
         if data.instruction and data.instruction['step'] and data.instruction['step']['destinationPoint']:
@@ -183,7 +193,42 @@ def recvMsg(sock: socket.socket):
             if not SIM_ENV:
                 driveVehicleByCommand(data)
             continue
-        # print(f"{tname} : {data}")
+        log(f"{tname} : {data}")
+
+
+def recvMsg(sock: socket.socket):
+    tname = threading.current_thread().name
+    buffer = ""
+    while True:
+        try:
+            data = sock.recv(BUF_SIZE).decode(CODE)
+            if not data:
+                break  # 连接断开
+            buffer += data
+            while '\n' in buffer:
+                line, buffer = buffer.split('\n', 1)
+                if ENCR_METHOD == "NON":
+                    pass
+                elif ENCR_METHOD == "DES":
+                    line = DESdecrypt(line)
+                elif ENCR_METHOD == "RSA":
+                    pass
+                elif ENCR_METHOD == "SM4":
+                    line = SM4_decrypt(line)
+                # 处理消息
+                data_obj = SendEntity.read_value(line)
+                if data_obj.instruction and data_obj.instruction['step'] and data_obj.instruction['step']['destinationPoint']:
+                    dpx_r = data_obj.instruction['step']['destinationPoint']['pose']['position']['x']
+                    dpy_r = data_obj.instruction['step']['destinationPoint']['pose']['position']['y']
+                    print(f"{tname} : {data_obj} \n dpx_r: {dpx_r} dpy_r: {dpy_r}")
+                    if not SIM_ENV:
+                        driveVehicleByCommand(data_obj)
+                else:
+                    log(f"{tname} : {data_obj}")
+        except Exception as e:
+            log(f"{tname} recv error: {e}")
+            break
+
 
 
 speed = 0.2 #默认移动速度 m/s
@@ -306,65 +351,81 @@ def turnRight():
     x, y = DIR_VEL
     DIR_VEL = [y, -x]
 
+def log(msg):
+    global ENABLE_LOG
+    if ENABLE_LOG:
+        print(msg)
+
 def driveVehicleByCommand(command: SendEntity):
     global DIR_VEL
     scale = 1000 / 5  # 比例尺：1单位 = 1000毫米 = 1米
 
-    '''
-    根据命令驱动车辆 ↑y+ →x+
-    :param command:
-    '''
+    # log("[INFO] 接收到指令: {}".format(command))
+
     dpx_r = command.instruction['step']['destinationPoint']['pose']['position']['x']
     dpy_r = command.instruction['step']['destinationPoint']['pose']['position']['y']
 
     dpx_r_cm, dpy_r_cm = dpx_r / scale, dpy_r / scale  # 缩放至米单位
+    log(f"[INFO] 目标点: x = {dpx_r_cm:.2f} m, y = {dpy_r_cm:.2f} m")
 
-    # 机器人当前面朝的方向
-    dx, dy = DIR_VEL 
+    dx, dy = DIR_VEL
+    log(f"[INFO] 当前朝向: dx = {dx}, dy = {dy}")
 
     if dx == 1:  # 朝 x+
+        log(f"[ACTION] 前进 {dpx_r_cm:.2f} 米（x 方向）")
         forward(dpx_r_cm)
         if dpy_r_cm > 0:
+            log(f"[ACTION] 左转后前进 {dpy_r_cm:.2f} 米（y+ 方向）")
             turnLeft()
             forward(dpy_r_cm)
         elif dpy_r_cm < 0:
+            log(f"[ACTION] 右转后前进 {abs(dpy_r_cm):.2f} 米（y- 方向）")
             turnRight()
             forward(abs(dpy_r_cm))
 
     elif dx == -1:  # 朝 x-
+        log(f"[ACTION] 后退 {dpx_r_cm:.2f} 米（x- 方向）")
         forward(-dpx_r_cm)
         if dpy_r_cm > 0:
+            log(f"[ACTION] 右转后前进 {dpy_r_cm:.2f} 米（y+ 方向）")
             turnRight()
             forward(dpy_r_cm)
         elif dpy_r_cm < 0:
+            log(f"[ACTION] 左转后前进 {abs(dpy_r_cm):.2f} 米（y- 方向）")
             turnLeft()
             forward(abs(dpy_r_cm))
 
     elif dy == 1:  # 朝 y+
+        log(f"[ACTION] 前进 {dpy_r_cm:.2f} 米（y 方向）")
         forward(dpy_r_cm)
         if dpx_r_cm > 0:
+            log(f"[ACTION] 右转后前进 {dpx_r_cm:.2f} 米（x+ 方向）")
             turnRight()
             forward(dpx_r_cm)
         elif dpx_r_cm < 0:
+            log(f"[ACTION] 左转后前进 {abs(dpx_r_cm):.2f} 米（x- 方向）")
             turnLeft()
             forward(abs(dpx_r_cm))
 
     elif dy == -1:  # 朝 y-
+        log(f"[ACTION] 后退 {dpy_r_cm:.2f} 米（y- 方向）")
         forward(-dpy_r_cm)
         if dpx_r_cm > 0:
+            log(f"[ACTION] 左转后前进 {dpx_r_cm:.2f} 米（x+ 方向）")
             turnLeft()
             forward(dpx_r_cm)
         elif dpx_r_cm < 0:
+            log(f"[ACTION] 右转后前进 {abs(dpx_r_cm):.2f} 米（x- 方向）")
             turnRight()
             forward(abs(dpx_r_cm))
 
-    # 会送确认指令已完成
+    log("[INFO] 指令执行完成，发送完成回执")
     commandExecuted()
 
 def commandExecuted():
     global client
     # 休息两秒执行下一条指令
-    time.sleep(2)
+    time.sleep(0.5)
     r = ReceiveEntity(operation="MOV", vehicleName=VEHICLE_NAME, instructionFeedBack="done")
     sendMsg(client, r)
 
@@ -394,6 +455,9 @@ if __name__ == '__main__':
                 sendMsg(client, r)
                 break
             if msg == "exit":
+                stop()
+                client.close()
+                raise Exception("exit...")
                 break
             sendMsg(client, r)
 
