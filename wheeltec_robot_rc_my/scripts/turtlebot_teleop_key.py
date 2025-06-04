@@ -27,7 +27,7 @@ RSA_PUB = ""
 # 设置模拟标志, 默认为模拟环境
 # SIM_ENV = False if os.getenv("SIM_ENV") else True
 SIM_ENV = False
-DIR_VEL = [0,1] # 表示对准y方向 [-1,0]对准x负方向
+DIR_VEL = [1,0] # 表示对准y方向 [-1,0]对准x负方向
 ENABLE_LOG = True  # 设置为 False 可关闭日志输出
 
 if not ENC_ENABLE:
